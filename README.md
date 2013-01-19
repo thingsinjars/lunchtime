@@ -9,3 +9,4 @@ Find places you can walk to, eat in and walk back from in an hour-long lunch bre
 [DEMO](http://thingsinjars.com/lab/map/lunchtime.html)
 ---
 
+http://thingsinjars.com/lab/map/lunchtime.html
