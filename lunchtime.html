@@ -1,0 +1,322 @@
+<!doctype html>
+<html>
+<head>
+	<meta charset="utf-8">
+	<title>Lunch, anyone?</title>
+	<style>
+	html,body, #mapContainer {
+		font-family: sans-serif;
+		background: #fff;
+		color: #444;
+		height: 100%;
+		padding:0;
+		margin:0;
+	}
+	a {
+		color:#7CD9F0;
+		text-decoration:none;
+	}
+	.bubbletitle {
+		text-decoration:none;
+		color:#0068b3 !important;
+		font-size:40px !important;
+	}
+	.text {
+		position: absolute;
+		top: 10px;
+		left:10px;
+		width:400px;
+		background: white;
+		padding: 0 20px 20px 20px;
+		box-shadow: 1px 1px 4px rgba(0, 0, 0, 0.5);
+	}
+	label {
+		display:block;
+	}
+	label span {
+		color:#2479C9;
+
+	}
+	p label {
+		display: inline-block;
+	}
+	input[type=range] {
+		display:block;
+		width:100%;
+	}
+	input[type=submit] {
+		font-size: 3em;
+	}
+	#message {
+		display: none;
+		position: absolute;
+		top: 30%;
+		left:10px;
+		bottom: 30%;
+		text-align: center;
+		font-size: 40px;
+		text-shadow:1px 1px 1px black;
+		right: 10px;
+		background: rgba(0,0,0,0.5);
+		color: white;
+		padding: 0 20px 20px 20px;
+	}
+	.nm_contentBG {
+		background-color: #F5F3F1 !important;
+		-webkit-border-radius: 0 !important;
+		-moz-border-radius: 0 !important;
+		-o-border-radius: 0 !important;
+		border-radius: 0 !important;
+		border: 1px solid black !important;
+	}
+	.nm_bubble_tail canvas {
+		display:none !important;
+	}
+	</style>
+	<script src="http://api.maps.nokia.com/2.2.3/jsl.js?with=all"></script>
+	<script src="http://ajax.googleapis.com/ajax/libs/jquery/1.8/jquery.min.js"></script>
+	<link rel="icon" href="http://here.com/favicon.ico">
+</head>
+<body>
+	<div id="mapContainer"></div>
+	<div class="text">
+		<h1>Lunchtime Walk</h1>
+		<p>Find places you can walk to, eat in and walk back from in an hour-long lunch break.</p>
+		<form>
+			<label>Length of lunch break (<span>60</span> minutes): <input id="lengthOfLunchBreak" type="range" value="60" min="10" max="120"></label>
+			<label>Walking speed (<span>80</span> metres per minute): <input id="speedOfWalking" type="range" value="80" min="10" max="100"></label>
+			<p>Search around: 
+				<label>Me: <input type="radio" name="searchAround" value="me" checked></label>
+				<label>Map Centre: <input type="radio" name="searchAround" value="map"></label>
+			</p>
+			<label><input type="submit" value="Lunch time!"></label>
+		</form>
+	</div>
+	<div id="message"></div>
+	<script>
+	(function() {
+		var map, resultSet, userPosition, searchCenter;
+
+		var lengthOfLunchBreak = 60,
+			// In minutes
+			lengthOfMeal = lengthOfLunchBreak / 2,
+			// In minutes
+			speedOfWalking = 80,
+			// Metres per minute
+			maxWalkingDistance = 0.75 * ((lengthOfLunchBreak / 2) / 2) * speedOfWalking,
+			// 25% messing around time
+			minWalkingDistance = 0.3 * maxWalkingDistance,
+
+			backupPlace, infoBubbles = new nokia.maps.map.component.InfoBubbles();
+
+		function init() {
+
+			// Authentication set-up is the first thing that you must do with the API 
+			nokia.maps.util.ApplicationContext.set({
+				"appId": "7bTZgHCebgI77qQKKdea",
+				"authenticationToken": "R2Z5anIudU0CQ3rhoXtqwA"
+			});
+
+			createMap();
+
+			// Do whatever other stuff you want to here
+			determineLocation();
+
+		};
+
+		// We create a map centered on the HERE office in Berlin
+
+
+		function createMap() {
+			var mapContainer = document.getElementById("mapContainer");
+			map = new nokia.maps.map.Display(mapContainer, {
+				center: [52.53, 13.39],
+				zoomLevel: 14,
+				// Bigger numbers are closer in
+				components: [ // We use these components to make the map interactive
+				new nokia.maps.map.component.ZoomBar(), new nokia.maps.map.component.Behavior(), infoBubbles]
+			});
+			map.setPadding(30,0,30,200)
+		};
+
+		// Try to figure out the user's location. If it isn't available, use the default map centre
+
+
+		function determineLocation() {
+			if(navigator.geolocation) {
+				navigator.geolocation.getCurrentPosition(foundUserLocation, positionError);
+			} else {
+				positionError();
+			}
+		}
+
+		// We successfully found the user's location, lets move the map there
+
+
+		function foundUserLocation(location) {
+			userPosition = location.coords;
+			searchPosition = location.coords;
+			map.setCenter(location.coords);
+			getLunchStop();
+		}
+
+		function positionError() {
+			// Do nothing here, just leave the map at the default location
+			getLunchStop();
+		}
+
+		function getLunchStop() {
+			var searchManager = nokia.places.search.manager;
+
+			if(resultSet) map.objects.remove(resultSet);
+			resultSet = new nokia.maps.map.Container();
+			var markerIcon = createIcon("", "#43A51B", "#FFF");
+			marker = new nokia.maps.map.Marker(searchPosition, {
+				icon: markerIcon
+			});
+			// marker = new nokia.maps.map.StandardMarker(map.center, {text: 'u'});
+			resultSet.objects.add(marker);
+			map.objects.add(resultSet);
+
+
+			var processResults = function(data, requestStatus, requestId) {
+					var i, len, locations, marker, potentialPlaces = [];
+
+					if(requestStatus == "OK") {
+						// The function findPlaces() and reverseGeoCode() of  return results in slightly different formats
+						locations = data.results ? data.results.items : [data.location];
+						// We check that at least one location has been found
+						if(locations.length > 0) {
+							// Remove results from previous search from the map
+							// if (resultSet) map.objects.remove(resultSet);
+							// Convert all found locations into a set of markers
+							for(i = 0, len = locations.length; i < len; i++) {
+								if(locations[i].distance > minWalkingDistance && locations[i].distance < maxWalkingDistance) {
+									potentialPlaces.push(locations[i]);
+									// marker = new nokia.maps.map.StandardMarker(locations[i].position, { text: i+1 });
+									// resultSet.objects.add(marker);
+								}
+								// console.log(locations[i]);
+							}
+
+							backupPlace = locations[Math.floor(Math.random() * locations.length)];
+
+							if(potentialPlaces.length === 0) {
+								noLunchForYou();
+							} else {
+								routeToPlace(potentialPlaces[Math.floor(Math.random() * potentialPlaces.length)]);
+							}
+
+							// Next we add the marker(s) to the map's object collection so they will be rendered onto the map
+							// map.objects.add(resultSet);
+							// We zoom the map to a view that encapsulates all the markers into map's viewport
+							map.zoomTo(resultSet.getBoundingBox(), false);
+						} else {
+							alert("Your search produced no results!");
+						}
+					} else {
+						alert("The search request failed");
+					}
+				};
+
+			searchManager.findPlacesByCategory({
+				category: 'eat-drink',
+				searchCenter: searchPosition,
+				onComplete: processResults
+			});
+
+		}
+
+		function routeToPlace(location) {
+			var marker, router;
+			marker = new nokia.maps.map.Marker(location.position, {
+				icon: location.icon,
+				anchor:new nokia.maps.util.Point(27, 55)
+			});
+
+			marker.addListener('click', function() {
+				infoBubbles.closeAll();
+				infoBubbles.openBubble('<a class="bubbletitle" href="http://here.com/place/'+this.placeId+'">'+this.title+'</a>', this.coordinate);
+			});
+
+			marker.title = location.title;
+			marker.placeId = location.placeId;
+
+			resultSet.objects.add(marker);
+
+			var waypoints = new nokia.maps.routing.WaypointParameterList();
+			waypoints.addCoordinate(searchPosition);
+			waypoints.addCoordinate(location.position);
+
+			router = new nokia.maps.routing.Manager();
+			var onRouteCalculated = function(observedRouter, key, value) {
+					if(value == "finished") {
+						var routes = observedRouter.getRoutes();
+
+						//create the default map representation of a route
+						// var mapRoute = new nokia.maps.routing.component.RouteResultSet(routes[0]).container;
+						// debugger;
+						resultSet.objects.add(new nokia.maps.map.Polyline(routes[0].shape, {
+				pen : new nokia.maps.util.Pen({
+					lineWidth: 5, 
+					strokeColor: "#0068b3"
+				})
+			}));
+						// map.objects.add(mapRoute);
+
+						//Zoom to the bounding box of the route
+						map.zoomTo(mapRoute.getBoundingBox(), false, "default");
+					} else if(value == "failed") {
+						alert("The routing request failed.");
+					}
+				};
+			/* We create on observer on router's "state" property so the above created
+			 * onRouteCalculated we be called once the route is calculated
+			 */
+			router.addObserver("state", onRouteCalculated);
+			var modes = [{
+				type: "shortest",
+				transportModes: ["pedestrian"],
+				options: "avoidTollroad",
+				trafficMode: "default"
+			}];
+			// Calculate the route (and call onRouteCalculated afterwards)
+			router.calculateRoute(waypoints, modes);
+
+
+		}
+
+		function noLunchForYou() {
+			debugger;
+			$('#message').html("<p>No lunch places near enough to walk to. Sorry.</p><p>If you took a longer lunch, you could go to <a href=\"http://here.com/place/"+backupPlace.placeId+"\">"+backupPlace.title+"</a></p>").show();
+			map.setCenter(backupPlace.position);
+		}
+
+		createIcon = function(text, mainColor, accentColor) {
+			var svgParser = new nokia.maps.gfx.SvgParser()
+			var iconSVG = '<svg width="33" height="33" xmlns="http://www.w3.org/2000/svg">' + '<circle stroke="__ACCENTCOLOR__" fill="__MAINCOLOR__" cx="16" cy="16" r="16" />' + '<text x="16" y="20" font-size="10pt" font-family="arial" font-weight="bold" text-anchor="middle" fill="__ACCENTCOLOR__" textContent="__TEXTCONTENT__">__TEXT__</text>' + '</svg>',
+				svg = iconSVG.replace(/__TEXTCONTENT__/g, text).replace(/__TEXT__/g, text).replace(/__ACCENTCOLOR__/g, accentColor).replace(/__MAINCOLOR__/g, mainColor);
+			return new nokia.maps.gfx.GraphicsImage(svgParser.parseSvg(svg));
+		};
+
+
+		$(function() {
+			init();
+			$('input[type=range]').on('change', function() {
+				$(this).parent().find('span').text($(this).val());
+				lengthOfLunchBreak = $('#lengthOfLunchBreak').val();
+				speedOfWalking = $('#speedOfWalking').val();
+				maxWalkingDistance = 0.75 * ((lengthOfLunchBreak / 2) / 2) * speedOfWalking;
+			})
+			$('input[type=submit]').on('click', function(e) {
+				e.preventDefault();
+				searchPosition = ($("input[name='searchAround']:checked").val()==="me") ? userPosition : map.center;
+				infoBubbles.closeAll();
+				getLunchStop();
+			});
+		});
+
+	})();
+</script>
+</body>
+</html>
